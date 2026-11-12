@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.base import clone
 
 from sklearn.compose import ColumnTransformer
 
@@ -398,219 +399,103 @@ X = data.drop(columns=["Target"])
 
 y = data["Target"]
 
-split_index = int(len(data) * 0.80)
+if len(data) < 30:
+    raise ValueError("At least 30 historical matches with valid rolling features are required.")
 
-X_train = X.iloc[:split_index].copy()
+# Keep chronology intact: train on the earliest 70%, select on the next 15%,
+# and reserve the latest 15% as an untouched final test period.
+train_end = int(len(data) * 0.70)
+validation_end = int(len(data) * 0.85)
 
-X_test = X.iloc[split_index:].copy()
+X_train = X.iloc[:train_end].copy()
+X_validation = X.iloc[train_end:validation_end].copy()
+X_test = X.iloc[validation_end:].copy()
+y_train = y.iloc[:train_end].copy()
+y_validation = y.iloc[train_end:validation_end].copy()
+y_test = y.iloc[validation_end:].copy()
 
-y_train = y.iloc[:split_index].copy()
-
-y_test = y.iloc[split_index:].copy()
-
-categorical_features = [
-
-    "HomeTeam",
-
-    "AwayTeam"
-
-]
-
-numeric_features = [
-
-    col
-
-    for col in X.columns
-
-    if col not in categorical_features
-
-]
+categorical_features = ["HomeTeam", "AwayTeam"]
+numeric_features = [col for col in X.columns if col not in categorical_features]
 
 preprocessor = ColumnTransformer(
-
     transformers=[
-
-        (
-
-            "teams",
-
-            OneHotEncoder(
-
-                handle_unknown="ignore"
-
-            ),
-
-            categorical_features
-
-        ),
-
-        (
-
-            "numbers",
-
-            StandardScaler(),
-
-            numeric_features
-
-        )
-
+        ("teams", OneHotEncoder(handle_unknown="ignore"), categorical_features),
+        ("numbers", StandardScaler(), numeric_features),
     ]
-
 )
 
 X_train_encoded = preprocessor.fit_transform(X_train)
-
+X_validation_encoded = preprocessor.transform(X_validation)
 X_test_encoded = preprocessor.transform(X_test)
 
 models = {
-
-    "Logistic Regression": LogisticRegression(
-
-        max_iter=2000
-
-    ),
-
+    "Logistic Regression": LogisticRegression(max_iter=2000),
     "Random Forest": RandomForestClassifier(
-
         n_estimators=500,
-
         max_depth=10,
-
         min_samples_leaf=3,
-
         random_state=42,
-
-        class_weight="balanced"
-
+        class_weight="balanced",
     ),
-
     "Gradient Boosting": GradientBoostingClassifier(
-
         n_estimators=300,
-
         learning_rate=0.05,
-
         max_depth=3,
-
-        random_state=42
-
-    )
-
+        random_state=42,
+    ),
 }
 
 results = []
-
 for name, model in models.items():
-
-    model.fit(
-
-        X_train_encoded,
-
-        y_train
-
-    )
-
-    predictions = model.predict(
-
-        X_test_encoded
-
-    )
-
-    accuracy = accuracy_score(
-
-        y_test,
-
-        predictions
-
-    )
-
-    precision = precision_score(
-
-        y_test,
-
-        predictions,
-
-        average="weighted",
-
-        zero_division=0
-
-    )
-
-    recall = recall_score(
-
-        y_test,
-
-        predictions,
-
-        average="weighted",
-
-        zero_division=0
-
-    )
-
-    f1 = f1_score(
-
-y_test,
-
-        predictions,
-
-        average="weighted",
-
-        zero_division=0
-
-    )
-
-    results.append({"Model": name,
-
-        "Accuracy": accuracy,
-
-        "Precision": precision,
-
-        "Recall": recall,
-
-        "F1": f1
-
+    model.fit(X_train_encoded, y_train)
+    validation_predictions = model.predict(X_validation_encoded)
+    results.append({
+        "Model": name,
+        "Validation Accuracy": accuracy_score(y_validation, validation_predictions),
+        "Validation Precision": precision_score(
+            y_validation, validation_predictions, average="weighted", zero_division=0
+        ),
+        "Validation Recall": recall_score(
+            y_validation, validation_predictions, average="weighted", zero_division=0
+        ),
+        "Validation F1": f1_score(
+            y_validation, validation_predictions, average="weighted", zero_division=0
+        ),
     })
 
-results_df = pd.DataFrame(results)
+results_df = pd.DataFrame(results).sort_values(
+    "Validation F1", ascending=False
+).reset_index(drop=True)
 
-print("\nMODEL COMPARISON")
-
+print("\nMODEL COMPARISON (CHRONOLOGICAL VALIDATION)")
 print(results_df.to_string(index=False))
 
-best_model_name = results_df.loc[
+best_model_name = results_df.iloc[0]["Model"]
+selected_model = models[best_model_name]
 
-    results_df["F1"].idxmax(),
+# Evaluate the selected model exactly once on the untouched latest period.
+test_predictions = selected_model.predict(X_test_encoded)
+print("\nSELECTED MODEL:", best_model_name)
+print("HELD-OUT TEST METRICS")
+print("Accuracy:", accuracy_score(y_test, test_predictions))
+print("Precision:", precision_score(
+    y_test, test_predictions, average="weighted", zero_division=0
+))
+print("Recall:", recall_score(
+    y_test, test_predictions, average="weighted", zero_division=0
+))
+print("F1:", f1_score(
+    y_test, test_predictions, average="weighted", zero_division=0
+))
+print("\nHELD-OUT CLASSIFICATION REPORT")
+print(classification_report(y_test, test_predictions, zero_division=0))
 
-    "Model"
-
-]
-
-final_model = models[best_model_name]
-
-print("\nSelected Model:", best_model_name)
-
-print("\nCLASSIFICATION REPORT")
-
-final_predictions = final_model.predict(
-
-    X_test_encoded
-
-)
-
-print(
-
-    classification_report(
-
-        y_test,
-
-        final_predictions,
-
-        zero_division=0
-
-    )
-
-)
+# Refit preprocessing and the chosen estimator on all observed historical rows
+# for future fixture predictions, after recording the untouched test metrics.
+preprocessor.fit(X.iloc[:validation_end])
+development_encoded = preprocessor.transform(X.iloc[:validation_end])
+final_model = clone(models[best_model_name])
+final_model.fit(development_encoded, y.iloc[:validation_end])
 
 team_latest = {}
 
