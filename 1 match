@@ -467,7 +467,7 @@ results_df = pd.DataFrame(results).sort_values(
     "Validation F1", ascending=False
 ).reset_index(drop=True)
 
-print("\\nMODEL COMPARISON (CHRONOLOGICAL VALIDATION)")
+print("\nMODEL COMPARISON (CHRONOLOGICAL VALIDATION)")
 print(results_df.to_string(index=False))
 
 best_model_name = results_df.iloc[0]["Model"]
@@ -475,7 +475,7 @@ selected_model = models[best_model_name]
 
 # Evaluate the selected model exactly once on the untouched latest period.
 test_predictions = selected_model.predict(X_test_encoded)
-print("\\nSELECTED MODEL:", best_model_name)
+print("\nSELECTED MODEL:", best_model_name)
 print("HELD-OUT TEST METRICS")
 print("Accuracy:", accuracy_score(y_test, test_predictions))
 print("Precision:", precision_score(
@@ -487,7 +487,7 @@ print("Recall:", recall_score(
 print("F1:", f1_score(
     y_test, test_predictions, average="weighted", zero_division=0
 ))
-print("\\nHELD-OUT CLASSIFICATION REPORT")
+print("\nHELD-OUT CLASSIFICATION REPORT")
 print(classification_report(y_test, test_predictions, zero_division=0))
 
 # Refit preprocessing and the chosen estimator on all observed historical rows
